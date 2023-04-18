@@ -34,10 +34,10 @@ class ESP32TWAI
     esp_err_t start(bool async = false);
     esp_err_t end();
     int availableMessages();
-    esp_err_t receiveMessage(uint16_t wait = 5);
-    esp_err_t sendMessage(uint16_t wait = 5);
-    void readAlerts(uint16_t wait = 5);
-    bool txSuccess(uint16_t wait = 5);
+    esp_err_t receiveMessage(uint16_t wait = 25);
+    esp_err_t sendMessage(uint16_t wait = 25);
+    void readAlerts(uint16_t wait = 25);
+    bool txSuccess(uint16_t wait = 25);
     void poll();
 
     bool isRunning() {

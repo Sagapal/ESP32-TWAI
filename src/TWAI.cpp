@@ -70,7 +70,8 @@ esp_err_t ESP32TWAI::start(bool async) {
 
     if (_driver_started) 
     {
-        twai_reconfigure_alerts(TWAI_ALERT_BUS_RECOVERED | TWAI_ALERT_BUS_OFF | TWAI_ALERT_RX_FIFO_OVERRUN  | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL | TWAI_ALERT_ERR_PASS | TWAI_ALERT_TX_SUCCESS, NULL);
+        twai_reconfigure_alerts(TWAI_ALERT_ALL, NULL);
+        // twai_reconfigure_alerts(TWAI_ALERT_BUS_RECOVERED | TWAI_ALERT_BUS_OFF | TWAI_ALERT_RX_FIFO_OVERRUN  | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL | TWAI_ALERT_ERR_PASS | TWAI_ALERT_TX_SUCCESS | TWAI_ALERT_ABOVE_ERR_WARN, NULL);
     }
 
     if (async) {
@@ -164,79 +165,199 @@ void ESP32TWAI::setBaudrate(long baudrate) {
 int ESP32TWAI::availableMessages() {
     if (twai_get_status_info(&_status_info) == ESP_OK)
     {
+        // printf("Messages in rx queue: %d\n", _status_info.msgs_to_rx);
         return _status_info.msgs_to_rx;
     }
     return -1;
 }
 
-esp_err_t ESP32TWAI::receiveMessage(uint16_t wait) {
-    return twai_receive(&rxMessage, pdMS_TO_TICKS(wait));
+esp_err_t ESP32TWAI::receiveMessage(uint16_t wait) 
+{
+    esp_err_t err = twai_receive(&rxMessage, pdMS_TO_TICKS(wait));
+    // ESP_OK: Message successfully received from RX queue
+    // ESP_ERR_TIMEOUT: Timed out waiting for message
+    // ESP_ERR_INVALID_ARG: Arguments are invalid
+    // ESP_ERR_INVALID_STATE: TWAI driver is not installed
+    if (err == ESP_OK) 
+    {
+        // printf("Message successfully received from RX queue\n");
+    } 
+    else if (err = ESP_ERR_INVALID_ARG)
+    {
+        printf("Message arguments are invalid\n");
+    }
+    else if (err = ESP_ERR_TIMEOUT)
+    {
+        printf("Timed out waiting for message\n");
+    }
+    else if (err = ESP_ERR_INVALID_STATE)
+    {
+        printf(" TWAI driver is not installed\n");
+    }
+    return err;
 }
 
+esp_err_t ESP32TWAI::sendMessage(uint16_t wait) 
+{
+    esp_err_t err = twai_transmit(&txMessage, pdMS_TO_TICKS(wait));
+    // ESP_OK: Transmission successfully queued/initiated
+    // ESP_ERR_INVALID_ARG: Arguments are invalid
+    // ESP_ERR_TIMEOUT: Timed out waiting for space on TX queue
+    // ESP_FAIL: TX queue is disabled and another message is currently transmitting
+    // ESP_ERR_INVALID_STATE: TWAI driver is not in running state, or is not installed
+    // ESP_ERR_NOT_SUPPORTED: Listen Only Mode does not support transmissions
 
-esp_err_t ESP32TWAI::sendMessage(uint16_t wait) {
-    return twai_transmit(&txMessage, pdMS_TO_TICKS(wait));
+    if (err == ESP_OK) 
+    {
+        // printf("Message queued for transmission\n");
+    } 
+    else if (err = ESP_ERR_INVALID_ARG)
+    {
+        printf("Message arguments are invalid\n");
+    }
+    else if (err = ESP_ERR_TIMEOUT)
+    {
+        printf("Timed out waiting for space on TX queue\n");
+    }
+    else if (err = ESP_FAIL)
+    {
+        printf("TX queue is disabled and another message is currently transmitting\n");
+    }
+    else if (err = ESP_ERR_INVALID_STATE)
+    {
+        printf("TWAI driver is not in running state, or is not installed\n");
+        // Handle this here? i.e. check state and then do something about it? 
+    }
+    else if (err = ESP_ERR_NOT_SUPPORTED)
+    {
+        printf("Listen Only Mode does not support transmissions\n");
+    }
+    return err;
 }
 
 void ESP32TWAI::readAlerts(uint16_t wait) {
-    uint32_t alerts;
+    uint32_t alerts{0x00};
     twai_status_info_t status_info;
-    twai_read_alerts(&alerts, pdMS_TO_TICKS(wait));
+    esp_err_t err = twai_read_alerts(&alerts, pdMS_TO_TICKS(wait));
     twai_get_status_info(&status_info);
-
-    if (alerts != _alerts && alerts != 0x00) 
+    // ESP_OK: Alerts read
+    // ESP_ERR_TIMEOUT: Timed out waiting for alerts
+    // ESP_ERR_INVALID_ARG: Arguments are invalid
+    // ESP_ERR_INVALID_STATE: TWAI driver is not installed
+    if (err == ESP_OK) 
     {
-        _alerts = alerts;
+        // printf("Alerts read successfully\n");
 
-        if (alerts & TWAI_ALERT_BUS_RECOVERED) 
+        // Handle the alerts if they are new.
+        if (alerts != _alerts && alerts != 0x00) 
         {
-            Serial.println("[TWAI] TWAI controller has successfully completed bus recovery");
-            if (_bus_recovered_cb) {
-                _bus_recovered_cb();
+            // printf("New alerts, check and update old\n");
+            _alerts = alerts;
+
+            // if (alerts & TWAI_ALERT_ERR_ACTIVE) // This is an OK statement so not necessary
+            // {
+            //     Serial.println("[TWAI] Controller is ACTIVE!");
+            // }
+            if (alerts & TWAI_ALERT_RECOVERY_IN_PROGRESS)
+            {
+                Serial.println("[TWAI] Controller recovery in progress...");
+            }
+            if (alerts & TWAI_ALERT_TX_IDLE) 
+            {
+                Serial.println("[TWAI] Tx queue is empty.");
+                
+            }
+            if (alerts & TWAI_ALERT_TX_FAILED) 
+            {
+                Serial.println("[TWAI] Previous transmission failed!");
+                
+            }
+            if (alerts & TWAI_ALERT_BUS_RECOVERED) 
+            {
+                Serial.println("[TWAI] TWAI controller has successfully completed bus recovery");
+                if (_bus_recovered_cb) {
+                    _bus_recovered_cb();
+                }
+            }
+            // if (alerts & TWAI_ALERT_ERR_PASS)
+            // {
+            //     // Serial.println("[TWAI] TWAI controller has become error passive. Is that actually a problem??");
+            //     // Serial.printf("State: %d\n", status_info.state);
+            //     // Serial.printf("TX queue size: %d\n", status_info.msgs_to_tx);
+            //     // Serial.printf("TX error counter: %d\n", status_info.tx_error_counter);
+            //     // Serial.printf("TX failed counter: %d\n", status_info.tx_failed_count);
+            //     // Serial.printf("RX queue size: %d\n", status_info.msgs_to_rx);
+            //     // Serial.printf("RX error counter: %d\n", status_info.rx_error_counter);
+            //     // Serial.printf("RX missed counter: %d\n", status_info.rx_missed_count);
+            //     // Serial.printf("BUS error count: %d\n", status_info.bus_error_count);
+            //     // twai_recover_from_error(); //twai_initiate_recovery(); maybe? 
+            //     // This needs to be handled somehow!?
+            // }
+            if (alerts & TWAI_ALERT_RX_QUEUE_FULL) 
+            {
+                Serial.println("[TWAI] The RX queue is full causing a received frame to be lost. Clearing queue");
+                Serial.printf("RX buffered: %d\t", status_info.msgs_to_rx);
+                Serial.printf("RX missed: %d\n", status_info.rx_missed_count);
+                Serial.printf("RX overrun %d\n", status_info.rx_overrun_count);
+                if (_rx_queue_full_cb) {
+                    _rx_queue_full_cb();
+                }
+                // TODO: Make this configurable
+                twai_clear_receive_queue();
+            }
+            // if (alerts & TWAI_ALERT_BUS_ERROR)
+            // {
+            //     Serial.println("[TWAI] A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
+            //     Serial.printf("Bus error count: %d\n", status_info.bus_error_count);
+            // }
+
+            // if (alerts & TWAI_ALERT_BELOW_ERR_WARN) // This is an OK statement so not necessary
+            // {
+            //     Serial.println("[TWAI] Both error counters are below warning limit.");
+            // }
+            // if (alerts & TWAI_ALERT_ABOVE_ERR_WARN)
+            // {
+            //     Serial.println("[TWAI] One of the error counters have exceeded the error warnings.");
+            //     Serial.printf("State: %d\n", status_info.state);
+            //     Serial.printf("TX queue size: %d\n", status_info.msgs_to_tx);
+            //     Serial.printf("TX error counter: %d\n", status_info.tx_error_counter);
+            //     Serial.printf("TX failed counter: %d\n", status_info.tx_failed_count);
+            //     Serial.printf("RX queue size: %d\n", status_info.msgs_to_rx);
+            //     Serial.printf("RX error counter: %d\n", status_info.rx_error_counter);
+            //     Serial.printf("RX missed counter: %d\n", status_info.rx_missed_count);
+            //     Serial.printf("BUS error count: %d\n", status_info.bus_error_count);
+            // }
+            if (alerts & TWAI_ALERT_BUS_OFF) 
+            {
+                Serial.println("[TWAI] BUS off condition occurred. CAN controller can no longer influence bus...");
+                if (_bus_off_cb) {
+                    _bus_off_cb();
+                }
+
+                if (autorecover) 
+                {
+                    Serial.println("[TWAI] Bus-off condition occurred. TWAI controller can no longer influence bus. Initiating recovery");
+                    twai_initiate_recovery();
+                } 
+                else 
+                {
+                    Serial.println("[TWAI] Bus-off condition occurred. TWAI controller can no longer influence bus");
+                }
             }
         }
-        if (alerts & TWAI_ALERT_ERR_PASS)
-        {
-            Serial.println("[TWAI] TWAI controller has become error passive.");
-            Serial.printf("State: %d\n", status_info.state);
-            Serial.printf("TX queue size: %d\n", status_info.msgs_to_tx);
-            Serial.printf("TX error counter: %d\n", status_info.tx_error_counter);
-            Serial.printf("TX failed counter: %d\n", status_info.tx_failed_count);
-            Serial.printf("RX queue size: %d\n", status_info.msgs_to_rx);
-            Serial.printf("RX error counter: %d\n", status_info.rx_error_counter);
-            Serial.printf("RX missed counter: %d\n", status_info.rx_missed_count);
-            Serial.printf("BUS error count: %d\n", status_info.bus_error_count);
-        }
-        if (alerts & TWAI_ALERT_RX_QUEUE_FULL) 
-        {
-            Serial.println("[TWAI] The RX queue is full causing a received frame to be lost. Clearing queue");
-            Serial.printf("RX buffered: %d\t", status_info.msgs_to_rx);
-            Serial.printf("RX missed: %d\n", status_info.rx_missed_count);
-            Serial.printf("RX overrun %d\n", status_info.rx_overrun_count);
-            if (_rx_queue_full_cb) {
-                _rx_queue_full_cb();
-            }
-            // TODO: Make this configurable
-            twai_clear_receive_queue();
-        }
-        if (alerts & TWAI_ALERT_BUS_ERROR)
-        {
-            Serial.println("[TWAI] A (Bit, Stuff, CRC, Form, ACK) error has occurred on the bus.");
-            Serial.printf("Bus error count: %d\n", status_info.bus_error_count);
-        }
-        if (alerts & TWAI_ALERT_BUS_OFF) 
-        {
-            if (_bus_off_cb) {
-                _bus_off_cb();
-            }
-            if (autorecover) {
-                Serial.println("[TWAI] Bus-off condition occurred. TWAI controller can no longer influence bus. Initiating recovery");
-                twai_initiate_recovery();
-            } else {
-                Serial.println("[TWAI] Bus-off condition occurred. TWAI controller can no longer influence bus");
-            }
-        }
-    }
+    } 
+    // else if (err = ESP_ERR_INVALID_ARG)
+    // {
+    //     printf("Alert arguments are invalid\n");
+    // }
+    // else if (err = ESP_ERR_TIMEOUT)
+    // {
+    //     printf("Timed out waiting for alerts\n");
+    // }
+    // else if (err = ESP_ERR_INVALID_STATE)
+    // {
+    //     printf(" TWAI driver is not installed\n");
+    // }
 }
 
 // Add check for TX alert? such that the code will wait until it is transmitted?
@@ -245,13 +366,14 @@ bool ESP32TWAI::txSuccess(uint16_t wait)
     // TODO: This should probably be a global variable that will only be updated during
     uint32_t alerts;
     twai_read_alerts(&alerts, pdMS_TO_TICKS(wait));
-    if (alerts & TWAI_ALERT_TX_SUCCESS)
+    if (alerts & TWAI_ALERT_TX_SUCCESS) // Maybe use the TWAI_ALERT_TX_IDLE instead?
     {
         return true;
         Serial.println("[TWAI] Tx success!");
     }
     else
     {
+        Serial.println("[TWAI] Tx failed!");
         return false;
     }
     
